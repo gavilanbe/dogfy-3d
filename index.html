@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Dogfy 3D — N64-style PoC</title>
+  <style>
+    body { margin: 0; background: #0b0e08; color: #c8e6a0; font-family: monospace; overflow: hidden; }
+    #hud  { position: fixed; top: 12px; left: 14px; pointer-events: none; line-height: 1.5; }
+    #hud .hint { opacity: 0.6; font-size: 12px; }
+    canvas { display: block; image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+  <div id="hud">
+    <div><strong>DOGFY 3D — N64-style PoC</strong></div>
+    <div class="hint">arrastra para girar · scroll para zoom · doble-click resetea</div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // ----------------------------------------------------------------------
+    // Palette (DMG-inspired so it ties visually with the GB game)
+    // ----------------------------------------------------------------------
+    const PAL = {
+      lightest: 0x9BBC0F,
+      mid:      0x8BAC0F,
+      shadow:   0x306230,
+      outline:  0x0F380F,
+      sky:      0x6a8a23,
+    };
+
+    // ----------------------------------------------------------------------
+    // Scene setup with N64-feel: low FOV jitter, distance fog, flat shading.
+    // ----------------------------------------------------------------------
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(PAL.sky);
+    scene.fog = new THREE.Fog(PAL.sky, 12, 38);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: false });
+    renderer.setPixelRatio(1);                  // N64-tier no-AA crispness
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const camera = new THREE.PerspectiveCamera(
+      55, window.innerWidth / window.innerHeight, 0.1, 100
+    );
+    camera.position.set(5, 4, 6);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 1.1, 0);
+    controls.enableDamping = true;
+
+    renderer.domElement.addEventListener('dblclick', () => {
+      camera.position.set(5, 4, 6);
+      controls.target.set(0, 1.1, 0);
+    });
+
+    // ----------------------------------------------------------------------
+    // Lighting: warm key + cool fill — gives N64 contrast without baked AO
+    // ----------------------------------------------------------------------
+    scene.add(new THREE.AmbientLight(0x6a7d3c, 0.55));
+    const sun = new THREE.DirectionalLight(0xfff0c0, 0.85);
+    sun.position.set(6, 10, 4);
+    scene.add(sun);
+
+    // ----------------------------------------------------------------------
+    // Ground: checkered grass plane (procedural canvas texture).
+    // ----------------------------------------------------------------------
+    function makeGroundTexture() {
+      const SIZE = 64;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = SIZE;
+      const ctx = cv.getContext('2d');
+      const a = '#8BAC0F';
+      const b = '#306230';
+      const cell = 8;
+      for (let y = 0; y < SIZE; y += cell) {
+        for (let x = 0; x < SIZE; x += cell) {
+          ctx.fillStyle = ((x / cell + y / cell) & 1) ? a : b;
+          ctx.fillRect(x, y, cell, cell);
+        }
+      }
+      const tex = new THREE.CanvasTexture(cv);
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
+      tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(20, 20);
+      return tex;
+    }
+
+    {
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 80),
+        new THREE.MeshLambertMaterial({ map: makeGroundTexture() })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+    }
+
+    // ----------------------------------------------------------------------
+    // Dog model — built from primitives at low poly count.
+    // The dog faces +X (snout to the right).
+    // ----------------------------------------------------------------------
+    const dog = new THREE.Group();
+    scene.add(dog);
+    dog.position.y = 0.7;
+
+    function mat(color) {
+      return new THREE.MeshLambertMaterial({ color, flatShading: true });
+    }
+    const matLight   = mat(PAL.mid);
+    const matBelly   = mat(PAL.lightest);
+    const matShadow  = mat(PAL.shadow);
+    const matOutline = mat(PAL.outline);
+
+    // --- Body: elongated ellipsoid (sphere scaled on X) ---
+    const body = new THREE.Mesh(
+      new THREE.SphereGeometry(0.55, 10, 7),
+      matLight
+    );
+    body.scale.set(1.7, 0.85, 1.0);
+    dog.add(body);
+
+    // Belly (lighter underside)
+    const belly = new THREE.Mesh(
+      new THREE.SphereGeometry(0.45, 10, 5, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2),
+      matBelly
+    );
+    belly.scale.set(1.7, 0.85, 1.0);
+    belly.position.y = -0.05;
+    dog.add(belly);
+
+    // --- Head: sphere placed at the front-top of the body ---
+    const head = new THREE.Mesh(
+      new THREE.SphereGeometry(0.45, 10, 8),
+      matLight
+    );
+    head.position.set(0.75, 0.30, 0);
+    dog.add(head);
+
+    // --- Snout: small cone protruding forward ---
+    const snout = new THREE.Mesh(
+      new THREE.ConeGeometry(0.22, 0.45, 8),
+      matBelly
+    );
+    snout.rotation.z = -Math.PI / 2;
+    snout.position.set(1.15, 0.22, 0);
+    dog.add(snout);
+
+    // --- Nose: tiny dark sphere at the snout tip ---
+    const nose = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 6, 5),
+      matOutline
+    );
+    nose.position.set(1.35, 0.25, 0);
+    dog.add(nose);
+
+    // --- Eyes: two small dark spheres on the head ---
+    function makeEye(z) {
+      const e = new THREE.Mesh(new THREE.SphereGeometry(0.07, 6, 5), matOutline);
+      e.position.set(0.95, 0.45, z);
+      return e;
+    }
+    dog.add(makeEye(0.28));
+    dog.add(makeEye(-0.28));
+
+    // --- Ears: flat-ish cones on top of the head ---
+    function makeEar(z) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.18, 0.35, 4), matShadow);
+      ear.position.set(0.65, 0.75, z);
+      ear.rotation.z = -0.3;
+      ear.rotation.x = z > 0 ? 0.4 : -0.4;
+      return ear;
+    }
+    dog.add(makeEar(0.25));
+    dog.add(makeEar(-0.25));
+
+    // --- Legs: 4 cylinders. (frontLeft, frontRight, backLeft, backRight) ---
+    function makeLeg(x, z) {
+      const leg = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.13, 0.13, 0.6, 6),
+        matShadow
+      );
+      leg.position.set(x, -0.4, z);
+      return leg;
+    }
+    const legs = {
+      fl: makeLeg( 0.55,  0.35),
+      fr: makeLeg( 0.55, -0.35),
+      bl: makeLeg(-0.55,  0.35),
+      br: makeLeg(-0.55, -0.35),
+    };
+    Object.values(legs).forEach(l => dog.add(l));
+
+    // --- Tail: small cylinder curling up at the back ---
+    const tail = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.10, 0.06, 0.50, 6),
+      matLight
+    );
+    tail.position.set(-0.95, 0.20, 0);
+    tail.rotation.z = -0.9;
+    dog.add(tail);
+
+    // ----------------------------------------------------------------------
+    // Animation: tiny idle bounce + leg sway so the dog feels alive.
+    // ----------------------------------------------------------------------
+    const clock = new THREE.Clock();
+    function animate() {
+      const t = clock.getElapsedTime();
+      dog.position.y = 0.7 + Math.sin(t * 4) * 0.04;
+      // Alternating leg sway (simulated run-in-place)
+      const sway = Math.sin(t * 8) * 0.25;
+      legs.fl.rotation.x =  sway;
+      legs.br.rotation.x =  sway;
+      legs.fr.rotation.x = -sway;
+      legs.bl.rotation.x = -sway;
+      tail.rotation.z = -0.9 + Math.sin(t * 6) * 0.15;
+
+      controls.update();
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
